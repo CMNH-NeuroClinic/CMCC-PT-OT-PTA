@@ -338,6 +338,9 @@ tr[data-act="slip"]:active{background:var(--wash)}
 .rp-dots i.used{background:#B8AAC8;border:1.5px solid #B8AAC8}
 .rp-dots i.now{background:var(--rc);border:1.5px solid var(--rc)}
 @media print{.rp-focus,.rp-mini,.rp-dots i,.rp-focus .rp-tag{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+
+.autolog{display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.75);border-radius:16px;padding:10px 16px;margin-top:18px;font-size:13.5px;color:#41524D}
+.mini-spin{width:16px;height:16px;border-radius:50%;border:2.5px solid var(--purple-soft);border-top-color:var(--purple);animation:sp .8s linear infinite;flex-shrink:0}
 </style>
 </head>
 <body>
@@ -769,6 +772,7 @@ views.landing = () => `
       <button class="entry admin" data-act="enter" data-v="admin"><span class="ico">${MODES.admin.icon}</span><span class="t">${MODES.admin.label}</span><span class="d">${MODES.admin.pill}</span></button>
       <button class="entry checkin" data-act="enter" data-v="checkin"><span class="ico">${MODES.checkin.icon}</span><span><span class="t">${MODES.checkin.label}</span><br><span class="d">${MODES.checkin.pill}</span></span></button>
     </div>
+    ${S.autologging ? `<div class="autolog"><span class="mini-spin"></span>กำลังเข้าสู่ระบบด้วยรหัสที่จำไว้…</div>` : ''}
     ${tipsHTML()}
     ${S.me ? obBarHTML() : ''}
     ${S.me ? `<div class="who-strip">เข้าสู่ระบบอยู่: <b>${esc(S.me.name)}</b> · ${S.me.isAdmin ? 'แอดมิน' : esc((ROLE[S.me.role] || {}).label || S.me.role)}<button data-act="logout">ออกจากระบบ</button></div>` : ''}
@@ -2106,12 +2110,14 @@ async function boot() {
   try { saved = localStorage.getItem('cmcc_code') || ''; } catch (e) { /* ไม่มี storage */ }
   if (GAS_API_URL.indexOf('PASTE_') === 0) { toast('ยังไม่ได้ตั้งค่า GAS_API_URL ในไฟล์ index.html', 'err'); return; }
   if (saved) {
-    // เข้าระบบเงียบๆ ด้วยรหัสที่จำไว้ แล้วอยู่ที่หน้าแรกให้เลือกโหมด
-    try { await run(() => doLogin(saved, true, 'staff', { stay: true }), { quiet: true }); }
+    // เข้าระบบเงียบๆ ด้วยรหัสที่จำไว้ — ใช้แถบเล็กบนหน้าแรกแทนสปินเนอร์เต็มจอ เพราะ Apps Script อาจตอบช้า (โดยเฉพาะครั้งแรกหลังไม่ได้ใช้งานนาน)
+    S.autologging = true; renderKeep();
+    try { await doLogin(saved, true, 'staff', { stay: true }); }
     catch (e) {
-      if (e.network) { toast('ยังไม่มีสัญญาณอินเทอร์เน็ต — ลองเปิดใหม่เมื่อมีสัญญาณ', 'err'); return; }   // รหัสยังจำไว้ ไม่ลบ
-      try { localStorage.removeItem('cmcc_code'); } catch (x) { /* ignore */ } S.me = null; goLanding(); toast('เข้าอัตโนมัติไม่สำเร็จ: ' + e.message, 'err');
+      if (e.network) { toast('ยังไม่มีสัญญาณอินเทอร์เน็ต — ลองเปิดใหม่เมื่อมีสัญญาณ', 'err'); }   // รหัสยังจำไว้ ไม่ลบ
+      else { try { localStorage.removeItem('cmcc_code'); } catch (x) { /* ignore */ } S.me = null; toast('เข้าอัตโนมัติไม่สำเร็จ: ' + e.message, 'err'); }
     }
+    finally { S.autologging = false; if (cur.name === 'landing') renderKeep(); }
   }
 }
 boot();
