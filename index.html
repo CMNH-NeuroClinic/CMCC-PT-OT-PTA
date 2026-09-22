@@ -319,6 +319,25 @@ tr[data-act="slip"]:active{background:var(--wash)}
 .linkbox{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:12.5px;background:var(--wash);color:var(--ink-2);word-break:break-all}
 .ci-done .btn{margin-top:8px;min-height:0;padding:9px 14px;font-size:14px}
 .draftnote{display:flex;justify-content:space-between;align-items:center;gap:8px}
+
+/* ===== รายงานญาติ: เนื้อหารายงานเด่น · จำนวนครั้งย่อเล็ก ===== */
+.rp-focus{background:var(--rs);border-left:6px solid var(--rc);border-radius:16px;padding:16px 16px 18px;margin-top:14px}
+.rp-focus .rp-sub{font:700 19px/1.3 'Prompt',sans-serif;color:var(--rc);margin-bottom:6px}
+.rp-focus .rp-meta{font-size:14.5px;color:var(--ink);opacity:.8}
+.rp-focus .rp-line{font-size:16px;margin-top:10px}
+.rp-focus .rp-tags{gap:7px;margin-top:6px}
+.rp-focus .rp-tag{background:var(--rc);color:#fff;font-size:14.5px;padding:4px 13px}
+.rp-focus .rp-tbl{font-size:14px}
+.rp-mini{margin-top:14px;padding:10px 12px;border-radius:12px;background:var(--wash)}
+.rp-mini-t{display:flex;align-items:baseline;gap:8px}
+.rp-mini .mn{font:700 22px/1 'Prompt',sans-serif;color:var(--ink-2)}
+.rp-mini .ml{font-size:13px;color:var(--ink-2)}
+.rp-mini.low .mn{color:#B36F00}.rp-mini.zero .mn{color:var(--coral)}
+.rp-dots{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.rp-dots i{width:14px;height:14px;border-radius:50%;border:1.5px dashed #CDBFDB;display:block}
+.rp-dots i.used{background:#B8AAC8;border:1.5px solid #B8AAC8}
+.rp-dots i.now{background:var(--rc);border:1.5px solid var(--rc)}
+@media print{.rp-focus,.rp-mini,.rp-dots i,.rp-focus .rp-tag{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style>
 </head>
 <body>
@@ -1259,6 +1278,17 @@ function paintReport() {
   el.innerHTML = reportHTML(R.k, R.p, R.ss, R.sid, R.mode);
 }
 function tags(list) { return `<div class="rp-tags">${list.map(x => `<span class="rp-tag">${esc(x)}</span>`).join('')}</div>`; }
+// สรุปจำนวนครั้งแบบย่อ (เล็กกว่าเนื้อหารายงาน ให้ญาติมองที่รายงานก่อน)
+function miniDots(k, nowNo) {
+  let out = '<div class="rp-dots">';
+  for (let i = 1; i <= k.total; i++) out += `<i class="${nowNo === i ? 'now' : i <= k.used ? 'used' : ''}"></i>`;
+  return out + '</div>';
+}
+function miniCount(k, ss, nowNo) {
+  const left = pkgLeft(k);
+  return `<div class="rp-mini ${left === 0 ? 'zero' : left <= 2 ? 'low' : ''}">
+    <div class="rp-mini-t"><span class="mn">${left}</span><span class="ml">ครั้งที่เหลือ · ใช้แล้ว ${k.used}/${k.total}</span></div>${miniDots(k, nowNo)}</div>`;
+}
 function reportHTML(k, p, ss, sid, mode) {
   const line = lineOf(k);
   const sel = ss.find(s => s.id === sid) || ss[ss.length - 1];
@@ -1297,11 +1327,8 @@ function reportHTML(k, p, ss, sid, mode) {
     <div class="rp-body">
       <div class="rp-who"><div class="nm">${esc(p.name)}</div><span class="badge grey">${PTYPE[p.type]}</span></div>
       <div class="rp-meta">แพ็คเกจ: ${esc(k.name)}<br>ผู้ให้บริการ: ${esc(who)}${k.expiryDate ? '<br>ใช้ได้ถึง: ' + esc(thDate(k.expiryDate)) : ''}</div>
-      <div class="rp-hr"></div>
-      <div class="left-big ${left === 0 ? 'zero' : left <= 2 ? 'low' : ''}"><span class="lb-n">${left}</span><span class="lb-u">ครั้งที่เหลือ · ใช้แล้ว ${kp.used}/${k.total}</span></div>
-      ${punchHTML(kp, ss, one ? sel.no : 0)}
-      <div class="rp-hr"></div>
-      ${detail}
+      <div class="rp-focus">${detail}</div>
+      ${miniCount(kp, ss, one ? sel.no : 0)}
     </div>
     <div class="rp-foot">ขอบคุณที่ไว้วางใจให้ CMCC Home Care by CMNH ดูแลคนที่คุณรัก<br>สอบถามเพิ่มเติม ${CLINIC_PHONES}</div>
   </div>`;
@@ -1399,6 +1426,17 @@ mounts.family = async ({ token }) => {
     if (box()) box().innerHTML = familyHTML(r);
   } catch (e) { if (box()) box().innerHTML = `<div class="note bad">${esc(e.message)}</div><div class="xs muted" style="margin-top:10px">หากคิดว่าลิงก์ควรใช้ได้ โปรดติดต่อ ${CLINIC_PHONES}</div>`; }
 };
+function famBody(x) {
+  const sym = split(x.symptoms), hw = split(x.homework);
+  return `<div class="rp-meta">${esc(thDate(x.date, true))} · ${esc(x.time)} น. · ${esc(x.durationMin)} นาที · ${esc(PLACE[x.location] ? PLACE[x.location].label : '')}${x.zone ? ' (Zone ' + esc(x.zone) + ')' : ''}<br>${esc(x.staffName)} (${esc(x.staffRole)})</div>
+    ${split(x.focus).length ? `<div class="rp-line"><b>โปรแกรมที่ฝึก</b></div>${tags(split(x.focus))}` : ''}
+    <div class="rp-line"><b>ความหนัก</b> ${esc(x.intensity)} &nbsp;·&nbsp; <b>การตอบสนอง</b> ${esc(x.response)}</div>
+    ${x.progress ? `<div class="rp-line"><b>ความก้าวหน้า</b> ${esc(x.progress)}</div>` : ''}
+    ${sym.length ? `<div class="rp-line"><b>อาการที่พบ</b> ${esc(sym.join(', '))}</div>` : ''}
+    ${x.pain !== '' && x.pain != null ? `<div class="rp-line"><b>ระดับปวด</b> ${esc(x.pain)}/10</div>` : ''}
+    ${hw.length ? `<div class="rp-line"><b>แนะนำให้ทำต่อที่บ้าน</b></div>${tags(hw)}` : ''}
+    ${x.note ? `<div class="rp-line"><b>หมายเหตุ</b> ${esc(x.note)}</div>` : ''}`;
+}
 function familyHTML(r) {
   const k = { id: 'fam', total: r.total, used: r.used };
   const ss = r.sessions.map(x => Object.assign({ pkgId: 'fam' }, x));
@@ -1416,18 +1454,18 @@ function familyHTML(r) {
       ${hw.length ? `<div class="rp-line"><b>แนะนำให้ทำต่อที่บ้าน</b></div>${tags(hw)}` : ''}
       ${x.note ? `<div class="rp-line"><b>หมายเหตุ</b> ${esc(x.note)}</div>` : ''}</div>`;
   };
+  const newest = ss.length ? ss[ss.length - 1] : null;
+  const older = ss.slice(0, -1).reverse();
   return `<div class="report"><div class="rp-body">
       <div class="rp-who"><div class="nm">${esc(r.patientName)}</div><span class="badge grey">${esc(PTYPE[r.patientType] || '')}</span></div>
       <div class="rp-meta">แพ็คเกจ: ${esc(r.pkgName)}${r.expiryDate ? '<br>ใช้ได้ถึง: ' + esc(thDate(r.expiryDate)) : ''}</div>
-      <div class="rp-hr"></div>
-      <div class="left-big ${left === 0 ? 'zero' : left <= 2 ? 'low' : ''}"><span class="lb-n">${left}</span><span class="lb-u">ครั้งที่เหลือ · ใช้แล้ว ${r.used}/${r.total}</span></div>
-      ${punchHTML(k, ss, 0)}
+      <div class="rp-focus">${newest ? `<div class="rp-sub">บันทึกล่าสุด · ครั้งที่ ${newest.no}</div>` + famBody(newest) : '<div class="rp-meta">ยังไม่มีการบันทึก</div>'}</div>
+      ${miniCount({ id: 'fam', total: r.total, used: r.used }, ss, 0)}
       ${lastAppt ? `<div class="rp-line" style="margin-top:12px"><b>นัดครั้งถัดไป</b> ${esc(thDate(lastAppt, true))}</div>` : ''}
       ${ex && ex.days <= 30 ? `<div class="note ${ex.days < 0 ? 'bad' : 'warn'}" style="margin-top:12px">${esc(ex.label)}</div>` : ''}
       ${left <= 2 && r.status !== 'cancelled' ? `<div class="note warn" style="margin-top:12px">${left === 0 ? 'ใช้ครบแพ็คเกจแล้ว' : 'เหลือ ' + left + ' ครั้ง'} — หากต้องการต่อแพ็คเกจ ติดต่อ ${CLINIC_PHONES}</div>` : ''}
     </div></div>
-    <div class="sec">บันทึกการฝึกแต่ละครั้ง (ล่าสุดอยู่บน)</div>
-    ${ss.length ? [...ss].reverse().map(card).join('') : '<div class="note">ยังไม่มีการบันทึก</div>'}
+    ${older.length ? `<div class="sec">ครั้งก่อนหน้า</div>${older.map(card).join('')}` : ''}
     <div class="rp-foot" style="margin-top:18px;text-align:center">ขอบคุณที่ไว้วางใจให้ CMCC Home Care by CMNH ดูแลคนที่คุณรัก<br>สอบถามเพิ่มเติม ${CLINIC_PHONES}</div>`;
 }
 
