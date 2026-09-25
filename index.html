@@ -369,7 +369,7 @@ const PLACE = {
   CMNH: { label: 'ศูนย์ CMNH' },
   TQL:  { label: 'ศูนย์ TQL' }
 };
-const PTYPE = { OPD: 'OPD', IPD: 'IPD', HOME: 'Home case' };
+const PTYPE = { OPD: 'OPD', IPD: 'IPD', HOME: 'Home case', TMSPMS: 'TMS+PMS', TMS: 'TMS', PMS: 'PMS' };
 const ROLE = {
   PT:    { label: 'PT',  full: 'นักกายภาพบำบัด' },
   OT:    { label: 'OT',  full: 'นักกิจกรรมบำบัด' },
@@ -744,6 +744,24 @@ function tipsHTML() {
     }
   }
   return out;
+}
+
+
+/* ---------- ค่าตอบแทนต่อครั้งของผู้ให้บริการ ---------- */
+// เคสหนึ่งอาจตกลงค่าตอบแทนต่อครั้งไว้เฉพาะเจาะจง (Packages.payRate) ต่างจากค่าเริ่มต้นของพนักงานคนนั้น
+// ถ้าไม่ได้ตั้งไว้ที่เคส จะใช้ค่าเริ่มต้นของพนักงาน (Staff.payPerSession)
+function effRate(s) {
+  const k = pkgById(s.pkgId);
+  if (k && k.payRate !== '' && k.payRate != null) return Number(k.payRate);
+  const st = staffByCode(s.staffCode);
+  return st && st.payPerSession !== '' && st.payPerSession != null ? Number(st.payPerSession) : null;
+}
+// อัตราที่ใช้บ่อย (จากค่าเริ่มต้นของพนักงานทุกคน + ค่าที่เคยตั้งไว้ต่อเคส) ไว้เสนอเป็นปุ่มเลือก
+function payRatePresets() {
+  const counts = {};
+  S.staff.forEach(s => { const v = Number(s.payPerSession); if (v > 0) counts[v] = (counts[v] || 0) + 1; });
+  S.packages.forEach(k => { const v = Number(k.payRate); if (v > 0) counts[v] = (counts[v] || 0) + 1; });
+  return Object.keys(counts).map(Number).sort((a, b) => counts[b] - counts[a] || a - b).slice(0, 3);
 }
 
 
@@ -1477,17 +1495,19 @@ function familyHTML(r) {
 /* ==========================================================================
    แอดมิน: สรุป (dashboard) · Excel · ทีมงาน · คนไข้ · ขายแพ็คเกจ
    ========================================================================== */
+// ค่าตอบแทนคิดต่อครั้งที่บันทึกจริง ไม่ใช่อัตราคงที่ — บางเคสอาจตกลงราคาไว้ไม่เท่ากัน (Packages.payRate)
 function monthData(ss) {
   const by = {};
   ss.forEach(s => {
-    const b = by[s.staffCode] = by[s.staffCode] || { code: s.staffCode, name: s.staffName, role: s.staffRole, sessions: 0, cases: new Set(), min: 0, value: 0 };
+    const b = by[s.staffCode] = by[s.staffCode] || { code: s.staffCode, name: s.staffName, role: s.staffRole, sessions: 0, cases: new Set(), min: 0, value: 0, pay: 0, rates: new Set(), unrated: 0 };
     b.sessions++; b.cases.add(s.patientId); b.min += Number(s.durationMin) || 0; b.value += Number(s.value) || 0;
+    const r = effRate(s);
+    if (r == null) b.unrated++; else { b.pay += r; b.rates.add(r); }
   });
-  return Object.values(by).map(b => {
-    const st = staffByCode(b.code);
-    const rate = st && st.payPerSession !== '' && st.payPerSession != null ? Number(st.payPerSession) : null;
-    return Object.assign(b, { cases: b.cases.size, rate, pay: rate == null ? null : rate * b.sessions });
-  }).sort((a, b) => b.sessions - a.sessions);
+  return Object.values(by).map(b => Object.assign(b, {
+    cases: b.cases.size,
+    rate: b.rates.size === 1 ? [...b.rates][0] : b.rates.size > 1 ? 'mixed' : null   // 'mixed' = ตกลงราคาไว้หลายอัตราในเดือนนี้
+  })).sort((a, b) => b.sessions - a.sessions);
 }
 function tabDash() {
   return `<main class="page wide stack">
@@ -1507,7 +1527,8 @@ async function paintDash() {
     const sold = S.packages.filter(k => k.status !== 'cancelled' && k.startDate >= from && k.startDate <= to);
     const soldSum = sold.reduce((a, k) => a + (Number(k.totalPrice) || 0), 0);
     const pay = rows.reduce((a, r) => a + (r.pay || 0), 0);
-    const hasPay = rows.some(r => r.pay != null);
+    const hasPay = rows.some(r => r.pay > 0);
+    const anyUnrated = rows.some(r => r.unrated > 0);
     const byPlace = Object.keys(PLACE).map(p => ({ l: PLACE[p].label, n: ss.filter(s => s.location === p).length }));
     const maxP = Math.max(1, ...byPlace.map(x => x.n));
     const low = S.packages.filter(k => k.status === 'active' && k.total > 1 && (pkgLeft(k) <= 2 || (expiryInfo(k) || {}).near)).sort((a, b) => pkgLeft(a) - pkgLeft(b)).slice(0, 12);
@@ -1526,11 +1547,11 @@ async function paintDash() {
       </div>
       <div class="sec">รายบุคคล · ${esc(thMonth(S.month))}</div>
       <div class="card scroll-x" style="padding:6px 8px"><table class="tbl"><thead><tr><th>ผู้ให้บริการ</th><th class="r">เคส</th><th class="r">ครั้ง</th><th class="r">ชม.</th><th class="r">มูลค่า</th>${hasPay ? '<th class="r">ค่าตอบแทน</th>' : ''}</tr></thead><tbody>
-        ${rows.map(r => `<tr data-act="slip" data-code="${esc(r.code)}" class="line-${r.role === 'PTA' ? 'AA' : r.role}"><td><b>${esc(r.name)}</b> <span class="badge">${esc(r.role)}</span></td><td class="r">${r.cases}</td><td class="r"><b>${r.sessions}</b></td><td class="r">${(r.min / 60).toFixed(1)}</td><td class="r">${baht(r.value)}</td>${hasPay ? `<td class="r">${r.pay == null ? '-' : baht(r.pay)}</td>` : ''}</tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูลในเดือนนี้</td></tr>'}
+        ${rows.map(r => `<tr data-act="slip" data-code="${esc(r.code)}" class="line-${r.role === 'PTA' ? 'AA' : r.role}"><td><b>${esc(r.name)}</b> <span class="badge">${esc(r.role)}</span></td><td class="r">${r.cases}</td><td class="r"><b>${r.sessions}</b></td><td class="r">${(r.min / 60).toFixed(1)}</td><td class="r">${baht(r.value)}</td>${hasPay ? `<td class="r">${r.pay > 0 ? baht(r.pay) + (r.unrated ? ' *' : '') : '-'}</td>` : ''}</tr>`).join('') || '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูลในเดือนนี้</td></tr>'}
         ${rows.length ? `<tr><td><b>รวม</b></td><td class="r">${cases}</td><td class="r"><b>${ss.length}</b></td><td class="r">${(rows.reduce((a, r) => a + r.min, 0) / 60).toFixed(1)}</td><td class="r"><b>${baht(value)}</b></td>${hasPay ? `<td class="r"><b>${baht(pay)}</b></td>` : ''}</tr>` : ''}
       </tbody></table></div>
       <div class="xs muted" style="margin-top:6px">แตะที่ชื่อทีมงานเพื่อดู/แชร์สลิปสรุปรายเดือน</div>
-      <div class="note" style="margin-top:10px">"มูลค่าบริการ" = ราคาแพ็คเกจ (รวมค่าเดินทางตามโซน) ÷ จำนวนครั้ง × จำนวนครั้งที่ทำจริง · ค่าตอบแทนคำนวณเมื่อตั้งค่าตอบแทนต่อครั้งในหน้า "ทีมงาน"</div>
+      <div class="note" style="margin-top:10px">"มูลค่าบริการ" = ราคาแพ็คเกจ (รวมค่าเดินทางตามโซน) ÷ จำนวนครั้ง × จำนวนครั้งที่ทำจริง · ค่าตอบแทนคิดตามค่าที่ตกลงไว้ต่อเคส ถ้าไม่ได้ตั้งไว้จะใช้ค่าเริ่มต้นของพนักงานในหน้า "ทีมงาน"${anyUnrated ? ' · * บางครั้งยังไม่ได้ตั้งค่าตอบแทนไว้เลย จึงไม่รวมอยู่ในยอดนี้' : ''}</div>
       <div class="grid2">
         <div><div class="sec">แยกตามสถานที่</div><div class="card bars">${byPlace.map(x => `<div class="br"><span class="lbl">${esc(x.l)}</span><span class="tr"><i style="width:${x.n / maxP * 100}%"></i></span><span class="v">${x.n}</span></div>`).join('')}</div></div>
         <div><div class="sec">แพ็คเกจใกล้หมด / ใกล้หมดอายุ</div><div class="card" style="padding:4px 14px">${low.length ? low.map(k => `<div class="item line-${lineOf(k)}" data-act="patient" data-id="${k.patientId}"><div class="grow"><div class="b small">${esc(k.patientName)}</div><div class="xs muted">${esc(k.name)}</div></div><span class="badge ${pkgLeft(k) === 0 ? 'bad' : 'warn'}">เหลือ ${pkgLeft(k)}${expiryInfo(k) && expiryInfo(k).near ? ' · ' + expiryInfo(k).days + ' วัน' : ''}</span></div>`).join('') : '<div class="small muted" style="padding:12px 0">ไม่มีแพ็คเกจใกล้หมด</div>'}</div></div>
@@ -1561,9 +1582,16 @@ async function openSlip(code) {
   const [from, to] = monthRange(S.month);
   let ss;
   try { ss = (await run(() => getSessions({ from, to, staffCode: code }))).slice().sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)); } catch (e) { return; }
+  // ค่าตอบแทนต่อกลุ่ม (คนไข้+แพ็คเกจ) ใช้ราคาที่ตกลงไว้กับเคสนั้นก่อน ถ้าไม่ได้ตั้งไว้ค่อยใช้ค่าเริ่มต้นของพนักงาน — แต่ละกลุ่มจึงอาจมีอัตราไม่เท่ากัน
   const by = {};
-  ss.forEach(s => { const key = s.patientId + '|' + s.pkgId; const b = by[key] = by[key] || { patient: s.patientName, pkg: s.pkgName, place: s.location, dates: [] }; b.dates.push(thShort(s.date)); });
-  const rate = st.payPerSession !== '' && st.payPerSession != null ? Number(st.payPerSession) : null;
+  ss.forEach(s => {
+    const key = s.patientId + '|' + s.pkgId;
+    const b = by[key] = by[key] || { patient: s.patientName, pkg: s.pkgName, place: s.location, dates: [], rate: effRate(s) };
+    b.dates.push(thShort(s.date));
+  });
+  const groups = Object.values(by);
+  const pay = groups.reduce((a, b) => a + (b.rate == null ? 0 : b.rate * b.dates.length), 0);
+  const unratedN = groups.filter(b => b.rate == null).reduce((a, b) => a + b.dates.length, 0);
   const mins = ss.reduce((a, s) => a + (Number(s.durationMin) || 0), 0), cases = new Set(ss.map(s => s.patientId)).size;
   const home = ss.filter(s => s.location === 'HOME').length;
   window.__slipName = `CMCC_สรุป_${st.name.replace(/[^\wก-๙]+/g, '_')}_${S.month}.png`;
@@ -1573,9 +1601,10 @@ async function openSlip(code) {
       <div class="tot" style="margin-top:12px"><span>จำนวนครั้ง</span><span>${ss.length} ครั้ง</span></div>
       <div class="xs muted">${cases} เคส · ${(mins / 60).toFixed(1)} ชม. · เยี่ยมบ้าน ${home} ครั้ง</div>
       <table><thead><tr><th>คนไข้ / แพ็คเกจ</th><th class="r">ครั้ง</th></tr></thead><tbody>
-      ${Object.values(by).map(b => `<tr><td><b>${esc(b.patient)}</b><br><span class="xs muted">${esc(b.pkg)}<br>${esc(b.dates.join(', '))}</span></td><td class="r"><b>${b.dates.length}</b></td></tr>`).join('') || '<tr><td colspan="2" class="muted">ไม่มีรายการในเดือนนี้</td></tr>'}
+      ${groups.map(b => `<tr><td><b>${esc(b.patient)}</b><br><span class="xs muted">${esc(b.pkg)}${b.rate != null ? ' · ' + esc(baht(b.rate)) + '/ครั้ง' : ''}<br>${esc(b.dates.join(', '))}</span></td><td class="r"><b>${b.dates.length}</b></td></tr>`).join('') || '<tr><td colspan="2" class="muted">ไม่มีรายการในเดือนนี้</td></tr>'}
       </tbody></table>
-      ${rate != null ? `<div class="tot" style="border-top:2px solid var(--purple-deep);margin-top:10px"><span>ค่าตอบแทน (${baht(rate)} × ${ss.length})</span><span>${baht(rate * ss.length)}</span></div>` : ''}
+      ${pay > 0 ? `<div class="tot" style="border-top:2px solid var(--purple-deep);margin-top:10px"><span>ค่าตอบแทนรวม</span><span>${baht(pay)}</span></div>` : ''}
+      ${unratedN ? `<div class="xs muted" style="margin-top:4px">ยังไม่ได้ตั้งค่าตอบแทนไว้ ${unratedN} ครั้ง จึงไม่รวมในยอดนี้</div>` : ''}
       ${isClosed(S.month + '-01') ? '<div class="xs muted" style="margin-top:8px">ยอดเดือนนี้ปิดแล้ว</div>' : '<div class="xs muted" style="margin-top:8px">ยังไม่ปิดยอดเดือนนี้ — ตัวเลขอาจเปลี่ยน</div>'}
     </div>
     <div class="btn-row" style="margin-top:14px"><button class="btn" data-act="slip-share">${ic('share')}แชร์รูป</button><button class="btn alt" data-act="slip-save">${ic('download')}บันทึกรูป</button></div>
@@ -1619,17 +1648,18 @@ async function exportExcel() {
     [11, 7, 22, 10, 12, 6, 30, 8, 18, 8, 6, 44, 10, 16, 18, 16, 12, 30, 16]);
   // 2) สรุปรายบุคคล (เคส / ครั้ง / ค่าตอบแทน)
   const md = monthData(ss);
-  const sumRows = md.map(r => [r.name, r.role, r.cases, r.sessions, Math.round(r.min / 6) / 10, Math.round(r.value), r.rate == null ? '' : r.rate, r.pay == null ? '' : r.pay]);
-  sumRows.push(['รวม', '', new Set(ss.map(s => s.patientId)).size, ss.length, Math.round(md.reduce((a, r) => a + r.min, 0) / 6) / 10, Math.round(ss.reduce((a, s) => a + (Number(s.value) || 0), 0)), '', md.some(r => r.pay != null) ? md.reduce((a, r) => a + (r.pay || 0), 0) : '']);
-  sumRows.push(['', '', '', '', '', '', '', ''], ['สถานะเดือน', isClosed(S.month + '-01') ? 'ปิดยอดแล้ว' : 'ยังไม่ปิดยอด', '', '', '', '', '', '']);
-  sheet('สรุปรายบุคคล', ['ผู้ให้บริการ', 'ตำแหน่ง', 'จำนวนเคส', 'จำนวนครั้ง', 'ชั่วโมง', 'มูลค่าบริการ (บาท)', 'ค่าตอบแทน/ครั้ง', 'ค่าตอบแทนรวม'], sumRows, [22, 10, 11, 11, 9, 18, 15, 15]);
+  const rateCell = r => r.rate == null ? '' : r.rate === 'mixed' ? 'หลายอัตรา' : r.rate;
+  const sumRows = md.map(r => [r.name, r.role, r.cases, r.sessions, Math.round(r.min / 6) / 10, Math.round(r.value), rateCell(r), r.pay > 0 ? r.pay : '', r.unrated || '']);
+  sumRows.push(['รวม', '', new Set(ss.map(s => s.patientId)).size, ss.length, Math.round(md.reduce((a, r) => a + r.min, 0) / 6) / 10, Math.round(ss.reduce((a, s) => a + (Number(s.value) || 0), 0)), '', md.reduce((a, r) => a + (r.pay || 0), 0), md.reduce((a, r) => a + (r.unrated || 0), 0) || '']);
+  sumRows.push(['', '', '', '', '', '', '', '', ''], ['สถานะเดือน', isClosed(S.month + '-01') ? 'ปิดยอดแล้ว' : 'ยังไม่ปิดยอด', '', '', '', '', '', '', '']);
+  sheet('สรุปรายบุคคล', ['ผู้ให้บริการ', 'ตำแหน่ง', 'จำนวนเคส', 'จำนวนครั้ง', 'ชั่วโมง', 'มูลค่าบริการ (บาท)', 'ค่าตอบแทน/ครั้ง', 'ค่าตอบแทนรวม', 'ครั้งที่ยังไม่ตั้งค่าตอบแทน'], sumRows, [22, 10, 11, 11, 9, 18, 15, 15, 20]);
   // 3) สถานะแพ็คเกจ (ใช้แล้ว / คงเหลือ)
   const inMonth = {};
   ss.forEach(s => { const b = inMonth[s.pkgId] = inMonth[s.pkgId] || { n: 0, v: 0 }; b.n++; b.v += Number(s.value) || 0; });
   const pk = S.packages.filter(k => k.status === 'active' || inMonth[k.id]).sort((a, b) => a.patientName.localeCompare(b.patientName, 'th'));
-  sheet('สถานะแพ็คเกจ', ['คนไข้', 'ประเภท', 'แพ็คเกจ', 'ผู้ให้บริการ', 'สถานที่', 'โซน', 'ครั้งทั้งหมด', 'ใช้แล้ว', 'คงเหลือ', 'ราคาแพ็คเกจ', 'เริ่ม', 'สถานะ', 'ทำในเดือนนี้ (ครั้ง)', 'มูลค่าในเดือนนี้', 'หมดอายุ'],
-    pk.map(k => [k.patientName, PTYPE[k.patientType] || k.patientType, k.name, k.staffName, PLACE[k.location] ? PLACE[k.location].label : k.location, k.zone, k.total, k.used, pkgLeft(k), Number(k.totalPrice) || 0, k.startDate, { active: 'กำลังใช้', completed: 'ครบแล้ว', cancelled: 'ยกเลิก' }[k.status] || k.status, (inMonth[k.id] || {}).n || 0, Math.round((inMonth[k.id] || {}).v || 0), k.expiryDate || '']),
-    [22, 10, 32, 18, 12, 6, 11, 9, 9, 13, 11, 10, 17, 15, 12]);
+  sheet('สถานะแพ็คเกจ', ['คนไข้', 'ประเภท', 'แพ็คเกจ', 'ผู้ให้บริการ', 'ค่าตอบแทน/ครั้ง (เคสนี้)', 'สถานที่', 'โซน', 'ครั้งทั้งหมด', 'ใช้แล้ว', 'คงเหลือ', 'ราคาแพ็คเกจ', 'เริ่ม', 'สถานะ', 'ทำในเดือนนี้ (ครั้ง)', 'มูลค่าในเดือนนี้', 'หมดอายุ'],
+    pk.map(k => [k.patientName, PTYPE[k.patientType] || k.patientType, k.name, k.staffName, k.payRate !== '' && k.payRate != null ? k.payRate : '(ค่าเริ่มต้นพนักงาน)', PLACE[k.location] ? PLACE[k.location].label : k.location, k.zone, k.total, k.used, pkgLeft(k), Number(k.totalPrice) || 0, k.startDate, { active: 'กำลังใช้', completed: 'ครบแล้ว', cancelled: 'ยกเลิก' }[k.status] || k.status, (inMonth[k.id] || {}).n || 0, Math.round((inMonth[k.id] || {}).v || 0), k.expiryDate || '']),
+    [22, 10, 32, 18, 17, 12, 6, 11, 9, 9, 13, 11, 10, 17, 15, 12]);
   // 4) ยอดขายแพ็คเกจ (รับเงินตามวันเริ่มแพ็คเกจ)
   const sold = S.packages.filter(k => k.status !== 'cancelled' && k.startDate >= from && k.startDate <= to).sort((a, b) => a.startDate.localeCompare(b.startDate));
   const soldRows = sold.map(k => [k.startDate, k.patientName, PTYPE[k.patientType] || k.patientType, k.name, k.total, Number(k.basePrice) || 0, k.zone, (Number(k.zoneAdd) || 0) * k.total, Number(k.totalPrice) || 0, PLACE[k.location] ? PLACE[k.location].label : k.location, k.staffName]);
@@ -1683,7 +1713,7 @@ async function toggleStaff(code) {
 }
 
 /* ---------------- คนไข้: ลงทะเบียน / แก้ไข ---------------- */
-const DEFAULT_LOC = { OPD: 'CMNH', IPD: 'TQL', HOME: 'HOME' };
+const DEFAULT_LOC = { OPD: 'CMNH', IPD: 'TQL', HOME: 'HOME', TMSPMS: 'CMNH', TMS: 'CMNH', PMS: 'CMNH' };
 views.patientForm = ({ id }) => {
   const p = id ? patientById(id) : null;
   if (!PF.init || PF.id !== (id || '')) PF = { init: 1, id: id || '', name: p ? p.name : '', type: p ? p.type : 'OPD', defaultLocation: p ? p.defaultLocation : 'CMNH', zone: p ? p.zone : '', condition: p ? p.condition : '', family: p ? p.family : '', note: p ? p.note : '', active: p ? p.active : true };
@@ -1729,7 +1759,7 @@ function pkgTitle(x) {
   return L.label + ' · ' + x.name;
 }
 function initSell(p) {
-  SF = { patientId: p.id, expiryM: '', line: 'PT', packKey: '', place: p.defaultLocation || 'CMNH', zone: p.zone || 'A', staffCode: '', start: todayStr(), override: false, price: '', note: '' };
+  SF = { patientId: p.id, expiryM: '', line: 'PT', packKey: '', place: p.defaultLocation || 'CMNH', zone: p.zone || 'A', staffCode: '', start: todayStr(), override: false, price: '', note: '', payMode: '', payCustom: '' };
 }
 function sellCalc() {
   const p = patientById(SF.patientId), x = packByKey(SF.packKey);
@@ -1747,6 +1777,7 @@ views.sell = ({ patientId }) => {
     <label class="f">สถานที่ให้บริการ</label><div id="sell-place"></div>
     <div id="sell-zone-wrap"><label class="f">โซนบ้านคนไข้</label><div id="sell-zone"></div></div>
     <label class="f" for="sell-staff">ผู้ให้บริการ</label><select class="in" id="sell-staff" data-bind="SF.staffCode"></select>
+    <label class="f">ค่าตอบแทนผู้ให้บริการต่อครั้ง (เคสนี้) <small>ไม่บังคับ — ไม่ตั้ง = ใช้ค่าเริ่มต้นของพนักงาน</small></label><div id="sell-pay"></div>
     <label class="f" for="sell-start">วันที่เริ่มแพ็คเกจ</label><input class="in" type="date" id="sell-start" data-bind="SF.start" value="${SF.start}">
     <label class="f">อายุแพ็คเกจ <small>ไม่บังคับ — ถ้าตั้ง ทีมงานจะบันทึกครั้งเกินวันหมดอายุไม่ได้</small></label><div id="sell-exp"></div>
     <label class="f" for="sell-note">หมายเหตุ <small>ไม่บังคับ เช่น ส่วนลด เงื่อนไขพิเศษ</small></label><input class="in" id="sell-note" data-bind="SF.note" maxlength="200">
@@ -1771,6 +1802,12 @@ function paintSell() {
   $('#sell-zone').innerHTML = chipGroup('SF', 'zone', ['A', 'B', 'C'].map(z => ({ v: z, l: ZONE_TEXT[z] })), SF.zone, { req: 1 });
   $('#sell-exp').innerHTML = chipGroup('SF', 'expiryM', [{ v: '', l: 'ไม่กำหนด' }, { v: '3', l: '3 เดือน' }, { v: '6', l: '6 เดือน' }, { v: '12', l: '12 เดือน' }], SF.expiryM, { req: 1 }) +
     (SF.expiryM ? `<div class="xs muted" style="margin-top:6px">หมดอายุ ${esc(thDate(addMonthsStr(SF.start, Number(SF.expiryM))))}</div>` : '');
+  const stForPay = staffByCode(SF.staffCode);
+  const payOpts = [{ v: '', l: 'ค่าเริ่มต้นของพนักงาน' + (stForPay && stForPay.payPerSession !== '' && stForPay.payPerSession != null ? ' (' + baht(stForPay.payPerSession) + ')' : '') }]
+    .concat(payRatePresets().map(v => ({ v: String(v), l: baht(v) + '/ครั้ง' })))
+    .concat([{ v: 'custom', l: 'กำหนดเอง' }]);
+  $('#sell-pay').innerHTML = chipGroup('SF', 'payMode', payOpts, SF.payMode, { req: 1 }) +
+    (SF.payMode === 'custom' ? `<input class="in" style="margin-top:10px" data-bind="SF.payCustom" value="${esc(SF.payCustom)}" inputmode="numeric" placeholder="ค่าตอบแทนต่อครั้งสำหรับเคสนี้ (บาท)">` : '');
   const roles = L.roles;
   const opts = S.staff.filter(s => s.active && s.role !== 'ADMIN' && (roles.includes('ANY') || roles.includes(s.role)));
   if (!opts.find(s => s.code === SF.staffCode)) SF.staffCode = opts.length === 1 ? opts[0].code : '';   // มีคนเดียว = เลือกให้เลย
@@ -1788,12 +1825,14 @@ async function saveSell() {
   if (!c) { toast('เลือกแพ็คเกจก่อน', 'err'); return; }
   if (!SF.staffCode) { toast('เลือกผู้ให้บริการ', 'err'); return; }
   if (SF.override && SF.price === '') { toast('กรอกราคาที่ปรับ หรือปิดตัวเลือกปรับราคา', 'err'); return; }
+  if (SF.payMode === 'custom' && SF.payCustom === '') { toast('กรอกค่าตอบแทนต่อครั้ง หรือเลือก "ค่าเริ่มต้นของพนักงาน" แทน', 'err'); return; }
   const L = LINES[SF.line];
   const pkg = {
     patientId: SF.patientId, catalogKey: c.x.key, name: pkgTitle(c.x), roles: L.roles.join('|'), total: c.x.n,
     basePrice: c.base, zone: (L.zone && SF.place === 'HOME') ? SF.zone : '', zoneAdd: c.perZone, totalPrice: c.total,
     location: SF.place, staffCode: SF.staffCode, startDate: SF.start, note: SF.note.trim(),
-    expiryDate: SF.expiryM ? addMonthsStr(SF.start, Number(SF.expiryM)) : ''
+    expiryDate: SF.expiryM ? addMonthsStr(SF.start, Number(SF.expiryM)) : '',
+    payRate: SF.payMode === 'custom' ? SF.payCustom : SF.payMode
   };
   try {
     await run(() => apiPost('addPackage', { pkg }));
@@ -1811,9 +1850,10 @@ function openPkgEdit(id) {
     <label class="f" for="pe-total">จำนวนครั้งทั้งหมด <small>(เพิ่มครั้งให้ลูกค้าได้ ลดต่ำกว่าที่ใช้แล้วไม่ได้)</small></label><input class="in" id="pe-total" inputmode="numeric" value="${k.total}">
     <label class="f" for="pe-price">ยอดรวม (บาท)</label><input class="in" id="pe-price" inputmode="numeric" value="${Number(k.totalPrice) || 0}">
     <label class="f" for="pe-staff">ผู้ให้บริการ</label><select class="in" id="pe-staff"><option value="">-- ไม่ระบุ --</option>${opts.map(s => `<option value="${esc(s.code)}" ${k.staffCode === s.code ? 'selected' : ''}>${esc(s.name)} (${s.role})</option>`).join('')}</select>
+    <label class="f" for="pe-pay">ค่าตอบแทนผู้ให้บริการต่อครั้ง (เคสนี้) <small>ว่าง = ใช้ค่าเริ่มต้นของพนักงาน</small></label><input class="in" id="pe-pay" inputmode="numeric" value="${k.payRate !== '' && k.payRate != null ? k.payRate : ''}" placeholder="เช่น 400">
     <label class="f" for="pe-exp">วันหมดอายุ <small>ว่าง = ไม่กำหนด</small></label><input class="in" type="date" id="pe-exp" value="${esc(k.expiryDate || '')}">
     <label class="f" for="pe-note">หมายเหตุ</label><input class="in" id="pe-note" value="${esc(k.note || '')}" maxlength="200">
-    ${isClosed(k.startDate) ? '<div class="note warn" style="margin-top:12px">แพ็คเกจนี้ขายในเดือนที่ปิดยอดแล้ว — แก้จำนวน/ราคา/สถานะไม่ได้ (แก้ผู้ให้บริการ วันหมดอายุ หมายเหตุได้)</div>' : ''}
+    ${isClosed(k.startDate) ? '<div class="note warn" style="margin-top:12px">แพ็คเกจนี้ขายในเดือนที่ปิดยอดแล้ว — แก้จำนวน/ราคา/ค่าตอบแทน/สถานะไม่ได้ (แก้ผู้ให้บริการ วันหมดอายุ หมายเหตุได้)</div>' : ''}
     <div class="btn-row" style="margin-top:18px"><button class="btn" data-act="save-pkg" data-k="${k.id}">บันทึก</button><button class="btn danger" data-act="cancel-pkg" data-k="${k.id}">ยกเลิกแพ็คเกจ</button></div>
     <button class="btn line" data-act="close-sheet" style="margin-top:10px">ปิด</button>`);
 }
@@ -1822,6 +1862,8 @@ async function savePkg(id) {
     const k = pkgById(id), body = { id, staffCode: $('#pe-staff').value, note: $('#pe-note').value, expiryDate: $('#pe-exp').value };
     if (Number($('#pe-total').value) !== Number(k.total)) body.total = $('#pe-total').value;
     if (Number($('#pe-price').value) !== (Number(k.totalPrice) || 0)) body.totalPrice = $('#pe-price').value;
+    const curPay = k.payRate !== '' && k.payRate != null ? String(k.payRate) : '';
+    if ($('#pe-pay').value.trim() !== curPay) body.payRate = $('#pe-pay').value.trim();
     await run(() => apiPost('updatePackage', body));
     await run(refreshCore); closeSheet(); toast('บันทึกแล้ว'); render();
   } catch (e) { /* แจ้งแล้ว */ }
