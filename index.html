@@ -547,7 +547,21 @@ function openSheet(html) {
   s.innerHTML = `<div class="pane" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
   s.classList.remove('hidden');
 }
-function closeSheet() { $('#sheet').classList.add('hidden'); $('#sheet').innerHTML = ''; }
+function closeSheet() {
+  $('#sheet').classList.add('hidden'); $('#sheet').innerHTML = '';
+  if (confirmResolve_) { const r = confirmResolve_, a = confirmAnswer_; confirmResolve_ = null; confirmAnswer_ = false; r(a); }
+}
+// กล่องยืนยันของแอปเอง (แทน confirm() ของเบราว์เซอร์ที่หน้าตาไม่เข้ากับดีไซน์) — ใช้: if (!(await confirmSheet('...'))) return;
+let confirmResolve_ = null, confirmAnswer_ = false;
+function confirmSheet(message, opt) {
+  opt = opt || {};
+  return new Promise(resolve => {
+    confirmResolve_ = resolve; confirmAnswer_ = false;
+    openSheet(`<div class="title" style="margin-bottom:10px">${esc(opt.title || 'ยืนยัน')}</div>
+      <div class="small" style="white-space:pre-line;color:var(--ink-2)">${esc(message)}</div>
+      <div class="btn-row" style="margin-top:18px"><button class="btn line" data-act="confirm-no">${esc(opt.cancelLabel || 'ยกเลิก')}</button><button class="btn ${opt.danger ? 'danger' : ''}" data-act="confirm-yes">${esc(opt.okLabel || 'ยืนยัน')}</button></div>`);
+  });
+}
 
 /* ---------------- นำทาง ---------------- */
 const views = {}, mounts = {};
@@ -684,6 +698,12 @@ function obBarHTML() {
   const bad = l.filter(x => x.err).length;
   return `<button class="ob-bar ${bad ? 'bad' : ''}" data-act="ob-open">⏳ ${l.length} รายการรอส่ง${bad ? ' · ' + bad + ' มีปัญหา' : ''}<span>ดู / ส่งตอนนี้</span></button>`;
 }
+// บรรทัดสถานะบนหน้าแรก — รวม "เข้าสู่ระบบอยู่" กับ "รายการรอส่ง" ไว้บรรทัดเดียว กันแบนเนอร์ซ้อนกันหลายกล่อง
+function whoStripHTML() {
+  const l = obMine();
+  const pending = l.length ? `<button class="linkbtn" data-act="ob-open" style="margin-left:6px">${l.length} รายการรอส่ง${l.some(x => x.err) ? ' ⚠️' : ''}</button>` : '';
+  return `<div class="who-strip">เข้าสู่ระบบอยู่: <b>${esc(S.me.name)}</b> · ${S.me.isAdmin ? 'แอดมิน' : esc((ROLE[S.me.role] || {}).label || S.me.role)}${pending}<button data-act="logout">ออกจากระบบ</button></div>`;
+}
 function openOutbox() {
   const l = obMine();
   openSheet(`<div class="title" style="margin-bottom:10px">รายการรอส่ง</div>` +
@@ -790,10 +810,8 @@ views.landing = () => `
       <button class="entry admin" data-act="enter" data-v="admin"><span class="ico">${MODES.admin.icon}</span><span class="t">${MODES.admin.label}</span><span class="d">${MODES.admin.pill}</span></button>
       <button class="entry checkin" data-act="enter" data-v="checkin"><span class="ico">${MODES.checkin.icon}</span><span><span class="t">${MODES.checkin.label}</span><br><span class="d">${MODES.checkin.pill}</span></span></button>
     </div>
-    ${S.autologging ? `<div class="autolog"><span class="mini-spin"></span>กำลังเข้าสู่ระบบด้วยรหัสที่จำไว้…</div>` : ''}
-    ${tipsHTML()}
-    ${S.me ? obBarHTML() : ''}
-    ${S.me ? `<div class="who-strip">เข้าสู่ระบบอยู่: <b>${esc(S.me.name)}</b> · ${S.me.isAdmin ? 'แอดมิน' : esc((ROLE[S.me.role] || {}).label || S.me.role)}<button data-act="logout">ออกจากระบบ</button></div>` : ''}
+    ${S.autologging ? `<div class="autolog"><span class="mini-spin"></span>กำลังเข้าสู่ระบบด้วยรหัสที่จำไว้…</div>` : tipsHTML()}
+    ${S.me ? whoStripHTML() : ''}
   </main>`;
 
 function goLanding() { stack = []; cur = { name: 'landing', params: {} }; render(); }
@@ -843,8 +861,8 @@ async function doLogin(code, remember, mode, opt) {
   if (opt && opt.stay) { goLanding(); return; }
   enterMode(mode || 'staff');
 }
-function doLogout() {
-  if (!confirm('ออกจากระบบ?')) return;
+async function doLogout() {
+  if (!(await confirmSheet('ออกจากระบบ?'))) return;
   try { localStorage.removeItem('cmcc_code'); } catch (e) { /* ignore */ }
   location.reload();
 }
@@ -1234,7 +1252,7 @@ async function saveSession() {
   catch (e) {
     if (btn) btn.disabled = false;
     if (e.network) { queueSession(s, k); return; }
-    if ((e.code === 'PKG_FULL' || e.code === 'EXPIRED') && S.me.isAdmin && confirm(e.message + '\n\nต้องการบันทึกต่อหรือไม่? (แอดมินยืนยันได้)')) {
+    if ((e.code === 'PKG_FULL' || e.code === 'EXPIRED') && S.me.isAdmin && await confirmSheet(e.message + '\n\nต้องการบันทึกต่อหรือไม่? (แอดมินยืนยันได้)', { okLabel: 'บันทึกต่อ' })) {
       try { done(await run(() => apiPost('addSession', { session: s, force: true }))); } catch (e2) { /* run() แจ้งแล้ว */ }
     } else toast(e.message, 'err');
   }
@@ -1435,7 +1453,7 @@ async function openShareLink(kid) {
     <button class="btn line" data-act="close-sheet" style="margin-top:10px">ปิด</button>`);
 }
 async function linkOff(kid) {
-  if (!confirm('ปิดลิงก์นี้? ญาติที่มีลิงก์เดิมจะเปิดดูไม่ได้อีก (สร้างลิงก์ใหม่ได้ภายหลัง)')) return;
+  if (!(await confirmSheet('ปิดลิงก์นี้? ญาติที่มีลิงก์เดิมจะเปิดดูไม่ได้อีก (สร้างลิงก์ใหม่ได้ภายหลัง)', { danger: true, okLabel: 'ปิดลิงก์' }))) return;
   try { await run(() => apiPost('shareLink', { pkgId: kid, on: false })); pkgById(kid).shareToken = ''; closeSheet(); toast('ปิดลิงก์แล้ว'); } catch (e) { /* แจ้งแล้ว */ }
 }
 
@@ -1572,7 +1590,7 @@ async function toggleMonth(close, n, sold) {
   const msg = close
     ? `ปิดยอด ${thMonth(m)}?\n\nมี ${n} ครั้ง · ยอดขายแพ็คเกจ ${baht(sold)}\nหลังปิด ทีมงานและแอดมินจะบันทึก/แก้ไข/ยกเลิกรายการของเดือนนี้ไม่ได้ (เปิดเดือนใหม่ได้ภายหลัง)`
     : `เปิด ${thMonth(m)} อีกครั้ง?\nตัวเลขของเดือนนี้จะกลับมาแก้ไขได้ — ควรแจ้งบัญชีหากเคยส่งตัวเลขไปแล้ว`;
-  if (!confirm(msg)) return;
+  if (!(await confirmSheet(msg, { danger: close, okLabel: close ? 'ปิดยอด' : 'เปิดเดือน' }))) return;
   try { const r = await run(() => apiPost(close ? 'closeMonth' : 'openMonth', { month: m })); S.closed = r.closed; S.cache = {}; toast(close ? 'ปิดยอดเดือนนี้แล้ว' : 'เปิดเดือนอีกครั้งแล้ว'); paintDash(); } catch (e) { /* แจ้งแล้ว */ }
 }
 
@@ -1708,7 +1726,7 @@ async function saveStaff() {
 }
 async function toggleStaff(code) {
   const st = staffByCode(code);
-  if (!confirm((st.active ? 'ปิดใช้งาน ' : 'เปิดใช้งาน ') + st.name + '?')) return;
+  if (!(await confirmSheet((st.active ? 'ปิดใช้งาน ' : 'เปิดใช้งาน ') + st.name + '?', { danger: st.active, okLabel: st.active ? 'ปิดใช้งาน' : 'เปิดใช้งาน' }))) return;
   try { await run(() => apiPost('updateStaff', { staffCode: code, active: !st.active })); await run(refreshCore); render(); } catch (e) { /* แจ้งแล้ว */ }
 }
 
@@ -1746,7 +1764,7 @@ async function savePatient() {
 }
 async function togglePatient(id) {
   const p = patientById(id);
-  if (!confirm(p.active ? 'ซ่อนคนไข้นี้จากรายชื่อ? (ข้อมูลและประวัติยังอยู่)' : 'แสดงคนไข้นี้อีกครั้ง?')) return;
+  if (!(await confirmSheet(p.active ? 'ซ่อนคนไข้นี้จากรายชื่อ? (ข้อมูลและประวัติยังอยู่)' : 'แสดงคนไข้นี้อีกครั้ง?', { danger: p.active, okLabel: p.active ? 'ซ่อน' : 'แสดง' }))) return;
   try { await run(() => apiPost('updatePatient', { id, active: !p.active })); await run(refreshCore); PF = {}; goHome('patients'); } catch (e) { /* แจ้งแล้ว */ }
 }
 
@@ -1777,13 +1795,15 @@ views.sell = ({ patientId }) => {
     <label class="f">สถานที่ให้บริการ</label><div id="sell-place"></div>
     <div id="sell-zone-wrap"><label class="f">โซนบ้านคนไข้</label><div id="sell-zone"></div></div>
     <label class="f" for="sell-staff">ผู้ให้บริการ</label><select class="in" id="sell-staff" data-bind="SF.staffCode"></select>
-    <label class="f">ค่าตอบแทนผู้ให้บริการต่อครั้ง (เคสนี้) <small>ไม่บังคับ — ไม่ตั้ง = ใช้ค่าเริ่มต้นของพนักงาน</small></label><div id="sell-pay"></div>
     <label class="f" for="sell-start">วันที่เริ่มแพ็คเกจ</label><input class="in" type="date" id="sell-start" data-bind="SF.start" value="${SF.start}">
-    <label class="f">อายุแพ็คเกจ <small>ไม่บังคับ — ถ้าตั้ง ทีมงานจะบันทึกครั้งเกินวันหมดอายุไม่ได้</small></label><div id="sell-exp"></div>
-    <label class="f" for="sell-note">หมายเหตุ <small>ไม่บังคับ เช่น ส่วนลด เงื่อนไขพิเศษ</small></label><input class="in" id="sell-note" data-bind="SF.note" maxlength="200">
-    <label class="check" style="margin-top:16px"><input type="checkbox" id="sell-ovr" data-act="ovr"> ปรับราคาเอง (ส่วนลด/ราคาพิเศษ)</label>
-    <input class="in hidden" id="sell-price" inputmode="numeric" data-bind="SF.price" placeholder="ยอดรวมที่ตกลงกับลูกค้า (บาท)">
     <div class="sum" style="margin-top:14px" id="sell-sum"></div>
+    <details class="more" style="margin-top:20px"><summary>รายละเอียดเพิ่มเติม <small style="font-weight:400">ค่าตอบแทน · อายุแพ็คเกจ · ปรับราคา · หมายเหตุ</small></summary><div class="inner">
+      <label class="f" style="margin-top:0">ค่าตอบแทนผู้ให้บริการต่อครั้ง (เคสนี้) <small>ไม่บังคับ — ไม่ตั้ง = ใช้ค่าเริ่มต้นของพนักงาน</small></label><div id="sell-pay"></div>
+      <label class="f">อายุแพ็คเกจ <small>ไม่บังคับ — ถ้าตั้ง ทีมงานจะบันทึกครั้งเกินวันหมดอายุไม่ได้</small></label><div id="sell-exp"></div>
+      <label class="check" style="margin-top:16px"><input type="checkbox" id="sell-ovr" data-act="ovr"> ปรับราคาเอง (ส่วนลด/ราคาพิเศษ)</label>
+      <input class="in hidden" id="sell-price" inputmode="numeric" data-bind="SF.price" placeholder="ยอดรวมที่ตกลงกับลูกค้า (บาท)">
+      <label class="f" for="sell-note">หมายเหตุ <small>ไม่บังคับ</small></label><input class="in" id="sell-note" data-bind="SF.note" maxlength="200">
+    </div></details>
   </main>
   <div class="savebar"><div class="in-bar"><button class="btn" data-act="save-sell">เพิ่มแพ็คเกจ</button></div></div>`;
 };
@@ -1869,7 +1889,7 @@ async function savePkg(id) {
   } catch (e) { /* แจ้งแล้ว */ }
 }
 async function cancelPkg(id) {
-  if (!confirm('ยกเลิกแพ็คเกจนี้? (ประวัติที่บันทึกไว้ยังอยู่)')) return;
+  if (!(await confirmSheet('ยกเลิกแพ็คเกจนี้? (ประวัติที่บันทึกไว้ยังอยู่)', { danger: true, okLabel: 'ยกเลิกแพ็คเกจ' }))) return;
   try { await run(() => apiPost('updatePackage', { id, status: 'cancelled' })); await run(refreshCore); closeSheet(); toast('ยกเลิกแพ็คเกจแล้ว'); render(); } catch (e) { /* แจ้งแล้ว */ }
 }
 
@@ -2022,6 +2042,8 @@ const actions = {
   tab: (d) => { S.tab = d.v; render(); },
   logout: () => doLogout(),
   'close-sheet': () => closeSheet(),
+  'confirm-yes': () => { confirmAnswer_ = true; closeSheet(); },
+  'confirm-no': () => { confirmAnswer_ = false; closeSheet(); },
   async login(d) {
     const code = ($('#loginCode').value || '').trim();
     if (!code) { showLoginMsg('กรอกรหัสก่อน'); return; }
@@ -2062,7 +2084,7 @@ const actions = {
   },
   'link-off': (d) => linkOff(d.k),
   'ob-open': () => openOutbox(),
-  'ob-del': (d) => { if (confirm('ลบรายการนี้ทิ้ง? (จะไม่ถูกบันทึกเข้าระบบ)')) { obDrop(d.id); openOutbox(); if (cur.name === 'home' || cur.name === 'landing') renderKeep(); } },
+  'ob-del': async (d) => { if (await confirmSheet('ลบรายการนี้ทิ้ง? (จะไม่ถูกบันทึกเข้าระบบ)', { danger: true, okLabel: 'ลบทิ้ง' })) { obDrop(d.id); openOutbox(); if (cur.name === 'home' || cur.name === 'landing') renderKeep(); } },
   'ob-retry': (d) => { obSave(obAll().map(x => x.id === d.id ? Object.assign(x, { err: '' }) : x)); closeSheet(); obFlush(false); },
   'ob-flush': () => { closeSheet(); obFlush(false); },
   'copy-url': async () => { toast((await copyText(location.href.split('#')[0])) ? 'คัดลอกลิงก์แล้ว — วางในช่องที่อยู่ของ Safari/Chrome' : 'คัดลอกไม่ได้', 'err'); },
